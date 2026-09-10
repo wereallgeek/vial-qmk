@@ -6,6 +6,7 @@
 	path = lib/chibios-contrib
 	url = https://github.com/qmk/ChibiOS-Contrib
 	branch = master
+	ignore = dirty
 [submodule "lib/googletest"]
 	path = lib/googletest
 	url = https://github.com/qmk/googletest
