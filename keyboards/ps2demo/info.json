@@ -1,8 +1,8 @@
 {
-    "keyboard_name": "PS2 USB Single Button",
-    "manufacturer": "BJL",
+    "keyboard_name": "PS2 USB demo",
+    "manufacturer": "We're all geeks",
     "url": "",
-    "maintainer": "Betzalel J. Lewis",
+    "maintainer": "Marsupial",
     "usb": {
         "vid": "0xFEED",
         "pid": "0x6060",
