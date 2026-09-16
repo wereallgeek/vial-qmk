@@ -12,7 +12,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     KC_LALT,           KC_A,    KC_S,    KC_D,    KC_F,    KC_G,    KC_H,    KC_J,    KC_K,    KC_L,    KC_LBRC, KC_RBRC, KC_PAST, KC_ENT,            KC_F3,
     
     // C=      shift                                                                     ,      .        /          britishpound       =              HELP
-    KC_LGUI, KC_LSFT, KC_Z,    KC_X,    KC_C,    KC_V,    KC_B,    KC_N,    KC_M,    KC_COMM, KC_DOT,  KC_SLSH,          KC_NUBS,  KC_PEQL,           KC_F4,
+    KC_LGUI, KC_LSFT, KC_Z,    KC_X,    KC_C,    KC_V,    KC_B,    KC_N,    KC_M,    KC_COMM, KC_DOT,  KC_SLSH,          KC_INT3,  KC_PEQL,           KC_F4,
      
                                                         //SPCBAR
                                                         KC_SPC
