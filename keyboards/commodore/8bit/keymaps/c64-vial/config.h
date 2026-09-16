@@ -43,5 +43,3 @@
     /* Row 8: Touches directes (RESTORE sur GP15, CAPS sur GP8) */ \
     { k41, k42, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO }  \
 }
-
-
