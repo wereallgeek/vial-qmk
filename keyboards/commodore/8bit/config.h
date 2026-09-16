@@ -8,6 +8,12 @@
 
 #define NO_USB_STARTUP_CHECK  true  // Don't wait for USB connection
 
+//Status LEDs (if needed)
+#define LED_CAPS_LOCK_PIN   GP11
+#define LED_NUM_LOCK_PIN    GP12
+#define LED_SCROLL_LOCK_PIN GP10
+#define LED_PIN_ON_STATE    1
+
 // PS/2 Keyboard Pin definitions
 #define PS2_KEYBOARD_CLOCK_PIN  GP16
 #define PS2_KEYBOARD_DATA_PIN   GP17
