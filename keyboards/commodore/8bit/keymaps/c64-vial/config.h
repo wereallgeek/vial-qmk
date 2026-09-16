@@ -12,9 +12,9 @@
 
 #define VIAL_KEYBOARD_UID {0xDF, 0xC3, 0x7B, 0x2F, 0xFC, 0x79, 0xCC, 0x8E}
 
-// Combinaison de déverrouillage pour Vial
-#define VIAL_UNLOCK_COMBO_ROWS { 1, 1, 7 }
-#define VIAL_UNLOCK_COMBO_COLS { 0, 5, 6 }
+// Vial unlock mapped to Run/Stop (7,3), C= (7,5), and Restore (8,0)
+#define VIAL_UNLOCK_COMBO_ROWS { 7, 7, 8 }
+#define VIAL_UNLOCK_COMBO_COLS { 3, 5, 0 }
 
 // LAYOUT MACRO: Cartographie stricte 1 pour 1 sans AUCUN duplicata
 #define LAYOUT_c64( \
