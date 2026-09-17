@@ -114,3 +114,7 @@ user_song_list.h
 compile_commands.json
 .clangd/
 .cache/
+
+
+!keyboards/commodore/8bit/
+!keyboards/commodore/8bit/**
