@@ -118,3 +118,6 @@ compile_commands.json
 
 !keyboards/commodore/8bit/
 !keyboards/commodore/8bit/**
+
+!keyboards/ps2demo/
+!keyboards/ps2demo/**
