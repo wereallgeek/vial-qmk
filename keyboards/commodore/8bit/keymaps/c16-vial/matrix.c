@@ -1,9 +1,7 @@
 #include "quantum.h"
 #include "matrix.h"
 
-// Meme cablage que le scan standard QMK (info.json, COL2ROW):
-// une rangée à la fois est tirée à LOW, les colonnes sont lues avec pull-up.
-#define DIRECT_PIN_CAPSLOCK GP8   // interrupteur vers GND, actif à l'état bas (comme le C64)
+#define DIRECT_PIN_CAPSLOCK GP8
 #define CAPS_ROW 8
 #define CAPS_COL 0
 
@@ -15,7 +13,7 @@ void matrix_init_custom(void) {
         setPinInputHigh(col_pins[c]);
     }
     for (uint8_t r = 0; r < 8; r++) {
-        setPinInputHigh(row_pins[r]);  // rangée non sélectionnée = haute impédance
+        setPinInputHigh(row_pins[r]);
     }
     setPinInputHigh(DIRECT_PIN_CAPSLOCK);
 }
@@ -44,7 +42,7 @@ bool matrix_scan_custom(matrix_row_t current_matrix[]) {
         }
     }
 
-    // Touche directe (rangée 8)
+    // direct keys as row 8
     matrix_row_t direct_bits = readPin(DIRECT_PIN_CAPSLOCK) ? 0 : ((matrix_row_t)1 << CAPS_COL);
     if (current_matrix[CAPS_ROW] != direct_bits) {
         current_matrix[CAPS_ROW] = direct_bits;
