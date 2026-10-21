@@ -65,6 +65,7 @@ void housekeeping_task_kb(void) {
                 // Now switch to PS/2
                 ps2_keyboard_init(PS2_KEYBOARD_CLOCK_PIN, PS2_KEYBOARD_DATA_PIN);
                 host_set_driver(&ps2_keyboard_host_driver);
+                last_ps2_led_state = 0xFF;  // force LED pins to resync from the PS/2 state
                 uprintf("[PS2] PS/2 driver activated\n");
 
             } else {
@@ -87,6 +88,9 @@ void housekeeping_task_kb(void) {
                 send_keyboard_report();
 
                 wait_ms(20);
+
+                // Re-apply the last LED state the USB host gave us
+                led_update_kb(host_keyboard_led_state());
             }
         }
     } else {
