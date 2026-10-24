@@ -57,6 +57,14 @@ typedef struct {
     uint8_t reserved    : 5;
 } ps2_led_state_t;
 
+// Health of the PS/2 link, used by the optional status LED (see kb.c)
+typedef enum {
+    PS2_STATUS_OK,        // running normally
+    PS2_STATUS_DISABLED,  // host sent 0xF5 (scanning disabled) and has not re-enabled us
+    PS2_STATUS_BUS_HELD   // CLK or DATA held low by the host for more than 1 s
+} ps2_status_t;
+ps2_status_t ps2_keyboard_status(void);
+
 // PS/2 Keyboard Device functions (all renamed)
 void ps2_keyboard_init(uint8_t clk_pin, uint8_t data_pin);
 void ps2_keyboard_task(void);

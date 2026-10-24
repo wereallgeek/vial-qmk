@@ -4,6 +4,40 @@
 #include "print.h"
 #include "host.h"
 
+// Fault indicator on the Pico on-board LED (GP25). Dark during normal operation;
+// it only lights up when something is wrong with the PS/2 link:
+//   5 Hz blink = host disabled the keyboard (0xF5) and never re-enabled it
+//   solid on   = host has held CLK or DATA low for more than 1 s
+// Optional: #define PS2_STATUS_HEARTBEAT_MS 10000 (in config.h) adds a short 50 ms blip
+// at that interval while healthy, so that a hung Pico can be told apart from a healthy one.
+// Use a different pin with: #define PS2_STATUS_LED_PIN GPxx
+#ifndef PS2_STATUS_LED_PIN
+#    define PS2_STATUS_LED_PIN GP25
+#endif
+#ifndef PS2_STATUS_HEARTBEAT_MS
+#    define PS2_STATUS_HEARTBEAT_MS 0
+#endif
+
+static void update_status_led(void) {
+    bool on = false;
+    if (!is_usb_mode()) {
+        switch (ps2_keyboard_status()) {
+            case PS2_STATUS_BUS_HELD:
+                on = true;
+                break;
+            case PS2_STATUS_DISABLED:
+                on = (timer_read32() / 100) & 1;
+                break;
+            default:
+#if PS2_STATUS_HEARTBEAT_MS > 0
+                on = (timer_read32() % PS2_STATUS_HEARTBEAT_MS) < 50;
+#endif
+                break;
+        }
+    }
+    writePin(PS2_STATUS_LED_PIN, on);
+}
+
 // Mode state
 static bool usb_mode = true;
 static bool last_mode = true;
@@ -24,6 +58,8 @@ bool is_ps2_mode(void) {
 
 void keyboard_pre_init_kb(void) {
     setPinInputHigh(MODE_SWITCH_PIN);
+    setPinOutput(PS2_STATUS_LED_PIN);
+    writePinLow(PS2_STATUS_LED_PIN);
     keyboard_pre_init_user();
 }
 
@@ -101,6 +137,7 @@ void housekeeping_task_kb(void) {
     if (!usb_mode) {
         ps2_keyboard_task();
     }
+    update_status_led();
 
     housekeeping_task_user();
 }

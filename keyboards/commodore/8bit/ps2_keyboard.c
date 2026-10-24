@@ -211,6 +211,13 @@ static inline bool ps2_data_read(void) {
 // Multi-byte host command (0xED, 0xF0, 0xF3) waiting for its argument byte
 static uint8_t ps2_pending_cmd = 0;
 
+// Last byte we sent (for the host's 0xFE "resend" request)
+static uint8_t last_sent_byte = 0;
+
+// How long the host has kept CLK/DATA low (inhibit / stuck line), for the status LED
+static bool     bus_low = false;
+static uint32_t bus_low_since = 0;
+
 static inline void ps2_release_bus(void) {
     ps2_data_high();
     ps2_clk_high();
@@ -288,6 +295,7 @@ static bool ps2_send_byte(uint8_t data) {
     // Inter-byte delay with both lines idle
     ps2_release_bus();
     wait_us(300);
+    if (data != PS2_RESEND) last_sent_byte = data;
     return true;
 
 aborted:
@@ -471,6 +479,11 @@ static void ps2_handle_command(uint8_t cmd) {
             ps2_send_response(PS2_BAT_SUCCESS);
             break;
 
+        // Host asks us to repeat the last byte (it saw a parity/framing error)
+        case PS2_CMD_RESEND:
+            ps2_send_response(last_sent_byte);
+            break;
+
         default:
             ps2_send_response(PS2_RESEND);
             break;
@@ -488,6 +501,7 @@ void ps2_keyboard_init(uint8_t clk_pin, uint8_t data_pin) {
     ps2_enabled = true;
     ps2_state = PS2_STATE_IDLE;
     ps2_pending_cmd = 0;
+    bus_low = false;
 
     // Initialize LED state
     ps2_leds.caps_lock = 0;
@@ -541,7 +555,23 @@ static bool ps2_buffer_has_space(uint8_t needed) {
     return (PS2_SEND_BUFFER_SIZE - used) >= needed;
 }
 
+ps2_status_t ps2_keyboard_status(void) {
+    if (bus_low && timer_elapsed32(bus_low_since) > 1000) return PS2_STATUS_BUS_HELD;
+    if (!ps2_enabled) return PS2_STATUS_DISABLED;
+    return PS2_STATUS_OK;
+}
+
 void ps2_keyboard_task(void) {
+    // Track how long the host keeps the bus low
+    if (!ps2_clk_read() || !ps2_data_read()) {
+        if (!bus_low) {
+            bus_low = true;
+            bus_low_since = timer_read32();
+        }
+    } else {
+        bus_low = false;
+    }
+
     // 1. Host request-to-send has priority over our own traffic
     if (ps2_host_request_pending()) {
         uint8_t cmd = 0;
