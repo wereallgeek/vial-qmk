@@ -65,6 +65,10 @@ typedef enum {
 } ps2_status_t;
 ps2_status_t ps2_keyboard_status(void);
 
+// Incremented every time the host sends us LED state (0xED + argument) or resets us,
+// even when the value is unchanged. Lets kb.c notice "the host just told us the state".
+uint8_t ps2_keyboard_led_report_count(void);
+
 // PS/2 Keyboard Device functions (all renamed)
 void ps2_keyboard_init(uint8_t clk_pin, uint8_t data_pin);
 void ps2_keyboard_task(void);

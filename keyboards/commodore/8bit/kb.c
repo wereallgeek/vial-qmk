@@ -4,6 +4,42 @@
 #include "print.h"
 #include "host.h"
 
+#ifdef CAPS_LATCHING
+// Matrix row of the off-matrix (direct pin) keys: 8 on both the C16 and C64 builds
+#    ifndef CAPS_LATCH_ROW
+#        define CAPS_LATCH_ROW 8
+#    endif
+
+// Caps Lock state as best we know it. The host LED report is the truth (USB and PS/2
+// hosts that send 0xED); whenever it changes we adopt it. Between reports we trust our
+// own taps, so a host that never reports LEDs still gets sensible behaviour.
+static bool    caps_assumed   = false;
+static bool    caps_last_led  = false;
+static uint8_t caps_last_seq  = 0;
+
+static bool caps_lock_now(void) {
+    bool led = host_keyboard_led_state().caps_lock;
+
+    // USB: the host always reports the real state, so the LED is the truth. No memory.
+    if (is_usb_mode()) {
+        caps_last_led = led;
+        caps_assumed  = led;
+        return led;
+    }
+
+    // PS/2: a host does not necessarily report every change, but when it does report
+    // (even with the same value as before) that report is the truth. Count reports so
+    // an unchanged value is not mistaken for "no news". Between reports we trust our taps.
+    uint8_t seq = ps2_keyboard_led_report_count();
+    if (led != caps_last_led || seq != caps_last_seq) {
+        caps_last_led = led;
+        caps_last_seq = seq;
+        caps_assumed  = led;
+    }
+    return caps_assumed;
+}
+#endif
+
 // Fault indicator on the Pico on-board LED (GP25). Dark during normal operation;
 // it only lights up when something is wrong with the PS/2 link:
 //   5 Hz blink = host disabled the keyboard (0xF5) and never re-enabled it
@@ -163,6 +199,26 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
                 keycode, usb_mode ? "USB" : "PS/2");
     }
 
+#ifdef CAPS_LATCHING
+    // Latching Caps Lock switch (build with CAPS_LATCHING=yes).
+    // The switch stays closed while latched. Contact made = Caps Lock must be ON,
+    // contact released = Caps Lock must be OFF, whatever the state was before:
+    // we only send KC_CAPS when the current state differs from what we want.
+    // Only the direct-pin row is affected, a KC_CAPS placed on the normal matrix
+    // keeps its usual behaviour.
+    if (keycode == KC_CAPS && record->event.key.row == CAPS_LATCH_ROW) {
+        bool want = record->event.pressed;
+        bool now  = caps_lock_now();
+        uprintf("[CAPS] switch %s: caps_now=%d want=%d -> %s\n", want ? "closed" : "open",
+                now, want, (now != want) ? "toggle" : "nothing");
+        if (now != want) {
+            tap_code_delay(KC_CAPS, 10);
+            caps_assumed = want;  // host LED report will confirm
+        }
+        return false;
+    }
+#endif
+
     return true;
 }
 
@@ -185,6 +241,12 @@ void matrix_init_kb(void) {
 
 
 void matrix_scan_kb(void) {
+#ifdef CAPS_LATCHING
+    // Follow the host Caps Lock LED on every scan, not only when the switch moves,
+    // otherwise a change made on the PC between two switch events is missed.
+    caps_lock_now();
+#endif
+
     // Read the current lock state
     led_t current_led_state = host_keyboard_led_state();
     uint8_t raw_state = current_led_state.raw;

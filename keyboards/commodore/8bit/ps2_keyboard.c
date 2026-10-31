@@ -214,6 +214,9 @@ static uint8_t ps2_pending_cmd = 0;
 // Last byte we sent (for the host's 0xFE "resend" request)
 static uint8_t last_sent_byte = 0;
 
+// Number of LED reports received from the host (see ps2_keyboard_led_report_count)
+static uint8_t ps2_led_reports = 0;
+
 // How long the host has kept CLK/DATA low (inhibit / stuck line), for the status LED
 static bool     bus_low = false;
 static uint32_t bus_low_since = 0;
@@ -397,6 +400,7 @@ static void ps2_handle_command(uint8_t cmd) {
                     ps2_leds.scroll_lock = (cmd >> 0) & 1;
                     ps2_leds.num_lock    = (cmd >> 1) & 1;
                     ps2_leds.caps_lock   = (cmd >> 2) & 1;
+                    ps2_led_reports++;
                     uprintf("[PS2] LEDs: scroll=%d num=%d caps=%d\n",
                             ps2_leds.scroll_lock, ps2_leds.num_lock, ps2_leds.caps_lock);
                     ps2_send_response(PS2_ACK);
@@ -473,6 +477,7 @@ static void ps2_handle_command(uint8_t cmd) {
             ps2_leds.scroll_lock = 0;
             ps2_leds.num_lock    = 0;
             ps2_leds.caps_lock   = 0;
+            ps2_led_reports++;
             send_buffer_head = send_buffer_tail = 0;
             ps2_send_response(PS2_ACK);
             wait_ms(PS2_INTER_BYTE_DELAY);
@@ -553,6 +558,10 @@ static bool ps2_buffer_has_space(uint8_t needed) {
         used = PS2_SEND_BUFFER_SIZE - (send_buffer_tail - send_buffer_head);
     }
     return (PS2_SEND_BUFFER_SIZE - used) >= needed;
+}
+
+uint8_t ps2_keyboard_led_report_count(void) {
+    return ps2_led_reports;
 }
 
 ps2_status_t ps2_keyboard_status(void) {
