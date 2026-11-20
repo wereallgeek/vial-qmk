@@ -1,4 +1,5 @@
-// keyboards/bjl/ps2demo/kb.c - FIXED VERSION with proper USB driver restoration
+// kb.c - USB / PS/2 dual-mode keyboard (mode chosen by MODE_SWITCH_PIN: High = USB, Low = PS/2).
+// Optional build flag CAPS_LATCHING=yes: the off-matrix Caps Lock key is a latching switch.
 #include "kb.h"
 #include "ps2_keyboard.h"
 #include "print.h"
@@ -84,6 +85,12 @@ static host_driver_t *original_usb_driver = NULL;
 // Track the last known LED state to prevent constant unneeded pin writes
 static uint8_t last_ps2_led_state = 0xFF;
 
+static void write_led_pins(led_t led) {
+    writePin(LED_CAPS_LOCK_PIN, led.caps_lock ? LED_PIN_ON_STATE : !LED_PIN_ON_STATE);
+    writePin(LED_NUM_LOCK_PIN, led.num_lock ? LED_PIN_ON_STATE : !LED_PIN_ON_STATE);
+    writePin(LED_SCROLL_LOCK_PIN, led.scroll_lock ? LED_PIN_ON_STATE : !LED_PIN_ON_STATE);
+}
+
 bool is_usb_mode(void) {
     return usb_mode;
 }
@@ -105,14 +112,17 @@ void keyboard_post_init_kb(void) {
 
 void housekeeping_task_kb(void) {
     static uint32_t mode_change_time = 0;
+    // First pass after power-up: read the mode switch and act at once (no 50 ms debounce,
+    // no USB clean-up delay) so the PS/2 side is up as early as possible.
+    static bool first_run = true;
     bool current_mode = readPin(MODE_SWITCH_PIN);
 
     // Check for mode mismatch (current pin vs last known mode)
     // This handles both runtime switching AND initial boot detection
     if (current_mode != last_mode) {
-        if (mode_change_time == 0) {
+        if (mode_change_time == 0 && !first_run) {
             mode_change_time = timer_read32();
-        } else if (timer_elapsed32(mode_change_time) > 50) {
+        } else if (first_run || timer_elapsed32(mode_change_time) > 50) {
             // Mode stable for 50ms - switch!
             last_mode = current_mode;
             usb_mode = current_mode;
@@ -131,8 +141,11 @@ void housekeeping_task_kb(void) {
                 }
 
                 // Clear USB keyboard state while USB driver is still active
-                clear_keyboard();
-                wait_ms(20);
+                // (not at power-up: nothing to clear, and it would forget held keys)
+                if (!first_run) {
+                    clear_keyboard();
+                    wait_ms(20);
+                }
 
                 // Now switch to PS/2
                 ps2_keyboard_init(PS2_KEYBOARD_CLOCK_PIN, PS2_KEYBOARD_DATA_PIN);
@@ -172,8 +185,13 @@ void housekeeping_task_kb(void) {
     // Run PS/2 task only in PS/2 mode
     if (!usb_mode) {
         ps2_keyboard_task();
+        // Host finished its init: announce keys that were already held at power-up
+        if (ps2_keyboard_replay_due()) {
+            send_keyboard_report();
+        }
     }
     update_status_led();
+    first_run = false;
 
     housekeeping_task_user();
 }
@@ -189,14 +207,6 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
 
     if (!process_record_user(keycode, record)) {
         return false;
-    }
-
-    if (record->event.pressed) {
-        uprintf("[DEBUG] Key pressed: keycode=0x%04X (%s mode)\n",
-                keycode, usb_mode ? "USB" : "PS/2");
-    } else {
-        uprintf("[DEBUG] Key released: keycode=0x%04X (%s mode)\n",
-                keycode, usb_mode ? "USB" : "PS/2");
     }
 
 #ifdef CAPS_LATCHING
@@ -223,9 +233,7 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
 }
 
 bool led_update_kb(led_t led_state) {
-    writePin(LED_CAPS_LOCK_PIN, led_state.caps_lock ? LED_PIN_ON_STATE : !LED_PIN_ON_STATE);
-    writePin(LED_NUM_LOCK_PIN, led_state.num_lock ? LED_PIN_ON_STATE : !LED_PIN_ON_STATE);
-    writePin(LED_SCROLL_LOCK_PIN, led_state.scroll_lock ? LED_PIN_ON_STATE : !LED_PIN_ON_STATE);
+    write_led_pins(led_state);
 
     // In PS/2 mode, block LED updates from USB
     // This prevents USB from sending any HID reports
@@ -255,15 +263,10 @@ void matrix_scan_kb(void) {
     if (!usb_mode && raw_state != last_ps2_led_state) {
         last_ps2_led_state = raw_state;
         
-        // Manually push the state to the physical pins
-        writePin(LED_CAPS_LOCK_PIN, current_led_state.caps_lock ? LED_PIN_ON_STATE : !LED_PIN_ON_STATE);
-        writePin(LED_NUM_LOCK_PIN, current_led_state.num_lock ? LED_PIN_ON_STATE : !LED_PIN_ON_STATE);
-        writePin(LED_SCROLL_LOCK_PIN, current_led_state.scroll_lock ? LED_PIN_ON_STATE : !LED_PIN_ON_STATE);
+        // Push the state to the physical pins (the PS/2 host never goes through led_update_kb)
+        write_led_pins(current_led_state);
     }
 
     // Keep your user-level keymap scanning active
     matrix_scan_user();
 }
-
-
-

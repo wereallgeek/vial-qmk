@@ -42,14 +42,6 @@ uint8_t ps2_keyboard_get_scancode_set(void);
 void ps2_keyboard_set_scancode_set(ps2_scancode_set_t set);
 */
 
-// PS/2 State Machine
-typedef enum {
-    PS2_STATE_IDLE,
-    PS2_STATE_SENDING,
-    PS2_STATE_RECEIVING,
-    PS2_STATE_WAIT_RESPONSE
-} ps2_state_t;
-
 typedef struct {
     uint8_t scroll_lock : 1;
     uint8_t num_lock    : 1;
@@ -68,6 +60,10 @@ ps2_status_t ps2_keyboard_status(void);
 // Incremented every time the host sends us LED state (0xED + argument) or resets us,
 // even when the value is unchanged. Lets kb.c notice "the host just told us the state".
 uint8_t ps2_keyboard_led_report_count(void);
+
+// True once when keys that are already held should be announced to the host again
+// (after the host finished its init). The caller then runs send_keyboard_report().
+bool ps2_keyboard_replay_due(void);
 
 // PS/2 Keyboard Device functions (all renamed)
 void ps2_keyboard_init(uint8_t clk_pin, uint8_t data_pin);

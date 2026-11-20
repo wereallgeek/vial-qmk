@@ -1,6 +1,7 @@
-// ps2_keyboard.c - FIXED VERSION with better media key debugging
+// ps2_keyboard.c - bit-banged PS/2 keyboard device (scancode set 2) as a QMK host driver
 #include "ps2_keyboard.h"
 #include "quantum.h"  // QMK main header with GPIO functions
+#include <string.h>
 
 #include "report.h"  // For report_keyboard_t, etc.
 
@@ -16,7 +17,6 @@ static uint8_t ps2_clk_pin;
 static uint8_t ps2_data_pin;
 
 // State variables
-static ps2_state_t ps2_state = PS2_STATE_IDLE;
 static bool ps2_enabled = true;
 static ps2_led_state_t ps2_leds = {0};
 
@@ -49,7 +49,7 @@ static ps2_mapping_t consumer_to_ps2_scancode(uint16_t usage) {
 
 // Convert QMK keycode to PS/2 scancode
 ps2_mapping_t qmk_to_ps2_scancode(uint16_t keycode) {
-    // FIXED: Check basic keycodes in main lookup table
+    // Check basic keycodes in main lookup table
     // Only use the lookup table if keycode is within bounds AND < 256
     if (keycode < 0x100 && keycode < PS2_SCANCODE_LOOKUP_SIZE) {
         ps2_mapping_t mapping = ps2_scancode_lookup[keycode];
@@ -216,6 +216,48 @@ static uint8_t last_sent_byte = 0;
 
 // Number of LED reports received from the host (see ps2_keyboard_led_report_count)
 static uint8_t ps2_led_reports = 0;
+
+// ---------------------------------------------------------------------------
+// Power-on self-test announcement (BAT) and replay of keys held at start-up
+// ---------------------------------------------------------------------------
+// A real keyboard sends 0xAA by itself after power-up. Some hosts (the Commander X16
+// SMC) do NOT send a reset first: they wait for that 0xAA and only fall back to a reset
+// after a ~2.5 s watchdog. So after the PS/2 driver starts we announce 0xAA every
+// PS2_BAT_REPEAT_MS until the host talks to us (any byte), for at most PS2_BAT_ANNOUNCE_MS.
+// Set PS2_BAT_ANNOUNCE_MS to 0 to disable.
+#ifndef PS2_BAT_ANNOUNCE_MS
+#    define PS2_BAT_ANNOUNCE_MS 3000
+#endif
+#ifndef PS2_BAT_REPEAT_MS
+#    define PS2_BAT_REPEAT_MS 200
+#endif
+// Keys held while the keyboard starts (e.g. Shift to bypass a cartridge) are announced
+// again once the host has finished its init (after 0xED or 0xF4), or after this delay.
+#ifndef PS2_REPLAY_FALLBACK_MS
+#    define PS2_REPLAY_FALLBACK_MS 1500
+#endif
+
+static uint32_t ps2_host_last_rx         = 0;      // time of the host's latest byte
+static bool     ps2_host_seen            = false;  // host sent us at least one byte
+static uint32_t ps2_started_at           = 0;
+static bool     ps2_bat_sent_once        = false;
+static uint32_t ps2_bat_last_sent        = 0;
+#ifndef PS2_BOOT_KEEPALIVE_MS
+#    define PS2_BOOT_KEEPALIVE_MS 4000
+#endif
+#ifndef PS2_BOOT_KEEPALIVE_PERIOD_MS
+#    define PS2_BOOT_KEEPALIVE_PERIOD_MS 100
+#endif
+static bool     ps2_replay_pending       = false;  // held keys not yet re-announced
+static bool     ps2_replay_due           = false;
+static bool     ps2_replay_fallback_done = false;
+
+static void ps2_request_replay(void) {
+    if (ps2_replay_pending) {
+        ps2_replay_pending = false;
+        ps2_replay_due     = true;
+    }
+}
 
 // How long the host has kept CLK/DATA low (inhibit / stuck line), for the status LED
 static bool     bus_low = false;
@@ -404,6 +446,7 @@ static void ps2_handle_command(uint8_t cmd) {
                     uprintf("[PS2] LEDs: scroll=%d num=%d caps=%d\n",
                             ps2_leds.scroll_lock, ps2_leds.num_lock, ps2_leds.caps_lock);
                     ps2_send_response(PS2_ACK);
+                    ps2_request_replay();  // host init is done (X16: this is its last step)
                     break;
 
                 case PS2_CMD_SET_TYPEMATIC:
@@ -455,6 +498,7 @@ static void ps2_handle_command(uint8_t cmd) {
         case PS2_CMD_ENABLE:
             ps2_enabled = true;
             ps2_send_response(PS2_ACK);
+            ps2_request_replay();
             break;
 
         // Disable scanning (also restores defaults, per the PS/2 spec)
@@ -482,6 +526,8 @@ static void ps2_handle_command(uint8_t cmd) {
             ps2_send_response(PS2_ACK);
             wait_ms(PS2_INTER_BYTE_DELAY);
             ps2_send_response(PS2_BAT_SUCCESS);
+            ps2_replay_pending = true;   // keys still held get re-announced after the host's init
+            ps2_replay_due     = false;
             break;
 
         // Host asks us to repeat the last byte (it saw a parity/framing error)
@@ -504,9 +550,19 @@ void ps2_keyboard_init(uint8_t clk_pin, uint8_t data_pin) {
     setPinInputHigh(ps2_data_pin);
 
     ps2_enabled = true;
-    ps2_state = PS2_STATE_IDLE;
     ps2_pending_cmd = 0;
     bus_low = false;
+
+    // Fresh start: nothing announced to the host yet
+    memset(&previous_report, 0, sizeof(previous_report));
+    send_buffer_head = send_buffer_tail = 0;
+    ps2_host_seen            = false;
+    ps2_started_at           = timer_read32();
+    ps2_bat_sent_once        = false;
+    ps2_bat_last_sent        = 0;
+    ps2_replay_pending       = true;
+    ps2_replay_due           = false;
+    ps2_replay_fallback_done = false;
 
     // Initialize LED state
     ps2_leds.caps_lock = 0;
@@ -564,6 +620,21 @@ uint8_t ps2_keyboard_led_report_count(void) {
     return ps2_led_reports;
 }
 
+bool ps2_keyboard_replay_due(void) {
+    bool due = ps2_replay_due;
+    if (!due && ps2_replay_pending && !ps2_replay_fallback_done &&
+        timer_elapsed32(ps2_started_at) > PS2_REPLAY_FALLBACK_MS) {
+        ps2_replay_fallback_done = true;  // stays pending: a later host init still replays
+        due = true;
+    }
+    if (due) {
+        ps2_replay_due = false;
+        // Forget what the host was told, so the next report re-sends a make for every held key
+        memset(&previous_report, 0, sizeof(previous_report));
+    }
+    return due;
+}
+
 ps2_status_t ps2_keyboard_status(void) {
     if (bus_low && timer_elapsed32(bus_low_since) > 1000) return PS2_STATUS_BUS_HELD;
     if (!ps2_enabled) return PS2_STATUS_DISABLED;
@@ -583,6 +654,8 @@ void ps2_keyboard_task(void) {
 
     // 1. Host request-to-send has priority over our own traffic
     if (ps2_host_request_pending()) {
+        ps2_host_seen = true;
+        ps2_host_last_rx = timer_read32();
         uint8_t cmd = 0;
         int8_t res = ps2_receive_byte(&cmd);
         if (res == PS2_RX_OK) {
@@ -596,6 +669,48 @@ void ps2_keyboard_task(void) {
         }
         return;
     }
+
+#if PS2_BAT_ANNOUNCE_MS > 0
+    // 1b. Announce the power-on self-test result until the host talks to us
+    if (!ps2_host_seen && timer_elapsed32(ps2_started_at) < PS2_BAT_ANNOUNCE_MS) {
+        if (!ps2_bat_sent_once || timer_elapsed32(ps2_bat_last_sent) >= PS2_BAT_REPEAT_MS) {
+            if (ps2_send_byte(PS2_BAT_SUCCESS)) {
+                ps2_bat_sent_once = true;
+                ps2_bat_last_sent = timer_read32();
+                // A real keyboard reports the keys that are down right after its
+                // self-test (before the host's first command): do the same, so a held
+                // Shift is already in the host's buffer when its init completes.
+                ps2_replay_due = true;
+            }
+            return;
+        }
+    }
+#endif
+
+#if PS2_BOOT_KEEPALIVE_MS > 0
+    // 1c. While the host boots, repeat the make of held MODIFIERS (like a real keyboard's
+    // typematic does). The X16 reads Shift ~1 s after its KERNAL starts; one make sent
+    // earlier may have been flushed. Only modifiers, and only when nothing else is queued, so ordering with later breaks is preserved.
+    static uint32_t last_keepalive = 0;
+    // Use the modifiers QMK sees right now (not only what was already announced):
+    // a Shift held since power-up may never have been announced to the host.
+    uint8_t held_mods = get_mods();
+    if (ps2_host_seen && !ps2_replay_pending && held_mods &&
+        send_buffer_head == send_buffer_tail &&
+        timer_elapsed32(ps2_host_last_rx) < PS2_BOOT_KEEPALIVE_MS &&
+        timer_elapsed32(last_keepalive) >= PS2_BOOT_KEEPALIVE_PERIOD_MS) {
+        last_keepalive = timer_read32();
+        for (uint8_t i = 0; i < 8; i++) {
+            const ps2_modifier_mapping_t *m = &modifier_mappings[i];
+            if (held_mods & m->mod_bit) {
+                if (m->needs_e0) ps2_keyboard_send_key_make(PS2_PREFIX_E0);
+                ps2_keyboard_send_key_make(m->scancode);
+            }
+        }
+        // Remember it was announced, so that releasing the key sends its break
+        previous_report.mods |= held_mods;
+    }
+#endif
 
     // 2. Normal scancode output (skipped automatically while host inhibits)
     if (send_buffer_head != send_buffer_tail) {
@@ -802,7 +917,7 @@ static void ps2_send_mouse(report_mouse_t *report) {
     // Not implemented
 }
 
-// Handle media/consumer keys - FIXED VERSION
+// Handle media/consumer keys
 static void ps2_send_extra(report_extra_t *report) {
     uint16_t current_media_key = 0;
 
