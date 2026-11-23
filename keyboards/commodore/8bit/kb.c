@@ -229,6 +229,11 @@ bool process_record_kb(uint16_t keycode, keyrecord_t *record) {
     }
 #endif
 
+    // Keys held at power-up are re-announced to the PS/2 host during its boot. Tracked in
+    // both modes: the very first scan runs before the mode switch has been read, so a key
+    // held at power-up is reported while usb_mode still has its default value.
+    ps2_keyboard_note_key(keycode, record->event.pressed);
+
     return true;
 }
 

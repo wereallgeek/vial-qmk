@@ -65,6 +65,10 @@ uint8_t ps2_keyboard_led_report_count(void);
 // (after the host finished its init). The caller then runs send_keyboard_report().
 bool ps2_keyboard_replay_due(void);
 
+// Report every key event (kb.c, process_record_kb): keys held at power-up are re-announced
+// to the host during boot, like Shift is.
+void ps2_keyboard_note_key(uint16_t keycode, bool pressed);
+
 // PS/2 Keyboard Device functions (all renamed)
 void ps2_keyboard_init(uint8_t clk_pin, uint8_t data_pin);
 void ps2_keyboard_task(void);

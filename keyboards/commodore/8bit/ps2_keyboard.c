@@ -243,11 +243,16 @@ static uint32_t ps2_started_at           = 0;
 static bool     ps2_bat_sent_once        = false;
 static uint32_t ps2_bat_last_sent        = 0;
 #ifndef PS2_BOOT_KEEPALIVE_MS
-#    define PS2_BOOT_KEEPALIVE_MS 4000
+#    define PS2_BOOT_KEEPALIVE_MS 2500
 #endif
 #ifndef PS2_BOOT_KEEPALIVE_PERIOD_MS
 #    define PS2_BOOT_KEEPALIVE_PERIOD_MS 100
 #endif
+// Keys (not modifiers) that were pressed before the host finished its init, e.g. held at
+// power-on to select a cartridge option. They are re-announced like the modifiers below.
+#define PS2_BOOT_KEYS_MAX 6
+static uint16_t ps2_boot_keys[PS2_BOOT_KEYS_MAX];
+static uint8_t  ps2_boot_keys_n = 0;
 static bool     ps2_replay_pending       = false;  // held keys not yet re-announced
 static bool     ps2_replay_due           = false;
 static bool     ps2_replay_fallback_done = false;
@@ -257,6 +262,23 @@ static void ps2_request_replay(void) {
         ps2_replay_pending = false;
         ps2_replay_due     = true;
     }
+}
+
+// Called by kb.c for every key event. Remembers basic keys pressed before the host's init
+// is complete; forgets them on release.
+void ps2_keyboard_note_key(uint16_t keycode, bool pressed) {
+    for (uint8_t i = 0; i < ps2_boot_keys_n; i++) {
+        if (ps2_boot_keys[i] == keycode) {
+            if (!pressed) ps2_boot_keys[i] = ps2_boot_keys[--ps2_boot_keys_n];
+            return;
+        }
+    }
+    if (!pressed || ps2_boot_keys_n >= PS2_BOOT_KEYS_MAX) return;
+    if (ps2_host_seen && !ps2_replay_pending) return;      // host init already done
+    if (keycode == 0 || keycode > 0xDF) return;            // basic non-modifier keycodes only
+    ps2_mapping_t m = qmk_to_ps2_scancode(keycode);
+    if (m.scancode == 0 || m.special_type != PS2_KEY_NORMAL) return;
+    ps2_boot_keys[ps2_boot_keys_n++] = keycode;
 }
 
 // How long the host has kept CLK/DATA low (inhibit / stuck line), for the status LED
@@ -688,14 +710,15 @@ void ps2_keyboard_task(void) {
 #endif
 
 #if PS2_BOOT_KEEPALIVE_MS > 0
-    // 1c. While the host boots, repeat the make of held MODIFIERS (like a real keyboard's
-    // typematic does). The X16 reads Shift ~1 s after its KERNAL starts; one make sent
-    // earlier may have been flushed. Only modifiers, and only when nothing else is queued, so ordering with later breaks is preserved.
+    // 1c. While the host boots, keep repeating the make of keys held since power-up (like a
+    // real keyboard's typematic). The X16 reads Shift / option keys ~1 s after its KERNAL
+    // starts; a make sent earlier may have been flushed by the SMC. Only when nothing else
+    // is queued, so the ordering with later breaks is preserved.
     static uint32_t last_keepalive = 0;
-    // Use the modifiers QMK sees right now (not only what was already announced):
-    // a Shift held since power-up may never have been announced to the host.
+    // Modifiers: use what QMK sees right now, a Shift held since power-up may never have
+    // been announced to this driver.
     uint8_t held_mods = get_mods();
-    if (ps2_host_seen && !ps2_replay_pending && held_mods &&
+    if (ps2_host_seen && !ps2_replay_pending && (held_mods || ps2_boot_keys_n) &&
         send_buffer_head == send_buffer_tail &&
         timer_elapsed32(ps2_host_last_rx) < PS2_BOOT_KEEPALIVE_MS &&
         timer_elapsed32(last_keepalive) >= PS2_BOOT_KEEPALIVE_PERIOD_MS) {
@@ -707,7 +730,20 @@ void ps2_keyboard_task(void) {
                 ps2_keyboard_send_key_make(m->scancode);
             }
         }
-        // Remember it was announced, so that releasing the key sends its break
+        for (uint8_t i = 0; i < ps2_boot_keys_n; i++) {
+            ps2_mapping_t m = qmk_to_ps2_scancode(ps2_boot_keys[i]);
+            if (m.needs_e0_prefix) ps2_keyboard_send_key_make(PS2_PREFIX_E0);
+            ps2_keyboard_send_key_make(m.scancode);
+            // Remember it was announced, so that releasing the key sends its break
+            bool known = false;
+            uint8_t free_slot = KEYBOARD_REPORT_KEYS;
+            for (uint8_t j = 0; j < KEYBOARD_REPORT_KEYS; j++) {
+                if (previous_report.keys[j] == ps2_boot_keys[i]) known = true;
+                else if (previous_report.keys[j] == 0 && free_slot == KEYBOARD_REPORT_KEYS) free_slot = j;
+            }
+            if (!known && free_slot < KEYBOARD_REPORT_KEYS) previous_report.keys[free_slot] = ps2_boot_keys[i];
+        }
+        // Same for modifiers
         previous_report.mods |= held_mods;
     }
 #endif
